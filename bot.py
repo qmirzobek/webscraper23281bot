@@ -28,6 +28,8 @@ class PinterestSpider(scrapy.Spider):
 
 # 🔹 Replace with your Telegram bot token from @BotFather
 BOT_TOKEN = os.getenv("YOUR_BOT_TOKEN")
+PINTEREST_ACCESS_TOKEN = os.getenv("PINTEREST_ACCESS_TOKEN")  # Store API Token in Env Vars
+
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # ✅ Function to extract text from a website
@@ -59,22 +61,19 @@ def extract_images(url):
 
     return images[:10]  # Limit to first 5 images
 
-# ✅ Function to run Scrapy Spider
+# ✅ Function to fetch images from Pinterest API
 def fetch_pinterest_images(query):
-    result_file = "pinterest_results.json"
-    # Run Scrapy with Splash and save results
-    subprocess.run(
-        f"scrapy crawl pinterest -a query={query} -o {result_file}",
-        shell=True,
-    )
-    
-    # Read Scrapy results
-    try:
-        with open(result_file, "r") as f:
-            data = json.load(f)
-            return data[0]["images"] if data else []
-    except Exception as e:
-        print(f"Error reading results: {e}")
+    url = f"https://api.pinterest.com/v5/search/pins?query={query}&page_size=10"
+    headers = {"Authorization": f"Bearer {PINTEREST_ACCESS_TOKEN}"}
+
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 200:
+        data = response.json()
+        images = [pin["images"]["original"]["url"] for pin in data.get("items", []) if "images" in pin]
+        return images
+    else:
+        print(f"Error: {response.json()}")
         return []
 
 # ✅ Telegram bot command: Handle /pinterest
@@ -94,6 +93,31 @@ def pinterest_search(message):
             bot.send_photo(message.chat.id, img_url)
     else:
         bot.send_message(message.chat.id, "❌ No images found.")
+
+
+# ✅ Telegram bot command: Handle links
+@bot.message_handler(func=lambda message: message.text.startswith("http"))
+def handle_link(message):
+    url = message.text.strip()
+    bot.send_message(message.chat.id, f"🔍 Extracting content from: {url}")
+
+    # Extract and send text
+    text = extract_text(url)
+    if len(text) > 4096:
+        bot.send_message(message.chat.id, f"📄 Website Text:\n{text[:4096]}")
+        for i in range(4096, len(text), 4096):
+            bot.send_message(message.chat.id, f"{text[i:i+4096]}")
+    else:
+        bot.send_message(message.chat.id, f"📄 Website Text:\n{text}")
+
+    # Extract and send images
+    images = extract_images(url)
+    if images:
+        for img_url in images:
+            bot.send_photo(message.chat.id, img_url)
+    else:
+        bot.send_message(message.chat.id, "❌ No images found.")
+
 
 @bot.message_handler(commands=["start"])
 def start_message(message):
