@@ -1,7 +1,7 @@
 import os
 import requests
 import telebot
-import yt_dlp
+from pytube import YouTube
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
@@ -38,25 +38,28 @@ def extract_images(url):
     
     return images[:5]  # Limit to first 5 images
 
-# ✅ Function to download video using yt-dlp
-def download_video(url):
-    output_file = "video.mp4"
-    ydl_opts = {
-        'outtmpl': output_file,  # Save as "video.mp4"
-        'format': 'bestvideo+bestaudio/best',
-        'merge_output_format': 'mp4',
-        'quiet': True,  # No unnecessary logs
-    }
+# ✅ Function to download YouTube video using pytube
+def download_youtube_video(url):
+    yt = YouTube(url)
+    
+    # Download video
+    video_stream = yt.streams.filter(progressive=True, file_extension="mp4").order_by("resolution").desc().first()
+    video_path = video_stream.download(filename="video.mp4")
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    # Download audio separately
+    audio_stream = yt.streams.filter(only_audio=True).first()
+    audio_path = audio_stream.download(filename="audio.mp4")
 
-    return output_file
+    # Convert audio to MP3
+    mp3_audio_path = "audio.mp3"
+    os.rename(audio_path, mp3_audio_path)
+
+    return video_path, mp3_audio_path
 
 # ✅ Telegram bot command: Handle /start
 @bot.message_handler(commands=["start"])
 def start_message(message):
-    bot.reply_to(message, "Send me a website link or video link, and I'll extract content or download the video!")
+    bot.reply_to(message, "Send me a website link or YouTube link, and I'll extract content or download videos!")
 
 # ✅ Telegram bot command: Handle links
 @bot.message_handler(func=lambda message: message.text.startswith("http"))
@@ -64,16 +67,25 @@ def handle_link(message):
     url = message.text.strip()
     bot.send_message(message.chat.id, f"🔍 Extracting content from: {url}")
 
-    # Detect if the link is a video site
-    if "youtube.com" in url or "youtu.be" in url or "twitter.com" in url or "instagram.com" in url:
-        bot.send_message(message.chat.id, "📥 Downloading video...")
+    # Detect if the link is a YouTube video
+    if "youtube.com" in url or "youtu.be" in url:
+        bot.send_message(message.chat.id, "📥 Downloading YouTube video...")
         try:
-            video_path = download_video(url)
+            video_path, audio_path = download_youtube_video(url)
+            
+            # Send video
             with open(video_path, "rb") as video:
                 bot.send_video(message.chat.id, video)
-            os.remove(video_path)  # Delete file after sending
+
+            # Send audio
+            with open(audio_path, "rb") as audio:
+                bot.send_audio(message.chat.id, audio)
+
+            # Delete files after sending
+            os.remove(video_path)
+            os.remove(audio_path)
         except Exception as e:
-            bot.send_message(message.chat.id, f"❌ Video download failed: {str(e)}")
+            bot.send_message(message.chat.id, f"❌ Failed to download video: {str(e)}")
         return
 
     # Extract and send text
