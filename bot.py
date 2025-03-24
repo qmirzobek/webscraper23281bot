@@ -1,6 +1,7 @@
 import os
 import requests
 import telebot
+import yt_dlp
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
@@ -18,19 +19,10 @@ def extract_text(url):
     for tag in soup(["script", "meta", "noscript"]):
         tag.extract()
 
-
     # Extract text
     text = soup.get_text(separator="\n").strip()
-    return text  # Telegram limits message size
-def extract_from_w3schools(url):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers)
-    soup = BeautifulSoup(response.text, "html.parser")
-    articles = soup.find_all("div", class_="contentcontainer")
-    text = ""
-    for article in articles:
-        text+=article
     return text
+
 # ✅ Function to extract image URLs
 def extract_images(url):
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -46,10 +38,25 @@ def extract_images(url):
     
     return images[:5]  # Limit to first 5 images
 
+# ✅ Function to download video using yt-dlp
+def download_video(url):
+    output_file = "video.mp4"
+    ydl_opts = {
+        'outtmpl': output_file,  # Save as "video.mp4"
+        'format': 'bestvideo+bestaudio/best',
+        'merge_output_format': 'mp4',
+        'quiet': True,  # No unnecessary logs
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+
+    return output_file
+
 # ✅ Telegram bot command: Handle /start
 @bot.message_handler(commands=["start"])
 def start_message(message):
-    bot.reply_to(message, "Send me a website link, and I'll extract text, images, and videos!")
+    bot.reply_to(message, "Send me a website link or video link, and I'll extract content or download the video!")
 
 # ✅ Telegram bot command: Handle links
 @bot.message_handler(func=lambda message: message.text.startswith("http"))
@@ -57,19 +64,22 @@ def handle_link(message):
     url = message.text.strip()
     bot.send_message(message.chat.id, f"🔍 Extracting content from: {url}")
 
-    
+    # Detect if the link is a video site
+    if "youtube.com" in url or "youtu.be" in url or "twitter.com" in url or "instagram.com" in url:
+        bot.send_message(message.chat.id, "📥 Downloading video...")
+        try:
+            video_path = download_video(url)
+            with open(video_path, "rb") as video:
+                bot.send_video(message.chat.id, video)
+            os.remove(video_path)  # Delete file after sending
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ Video download failed: {str(e)}")
+        return
 
-    words=url.split("/")
-    if 'w3schools' in words:
-        text=extract_from_w3schools(url)
-        # bot.send_message(message.chat.id, "Sorry, I can't extract content from W3Schools.")
-        # return
-    else:
-        # Extract and send text
-        text = extract_text(url)
-    if(len(text) > 4096):
-        bot.send_message(message.chat.id, f"📄 Website Text:\n{text[:4096]}")
-        for i in range(4096, len(text), 4096):
+    # Extract and send text
+    text = extract_text(url)
+    if len(text) > 4096:
+        for i in range(0, len(text), 4096):
             bot.send_message(message.chat.id, f"{text[i:i+4096]}")
     else:
         bot.send_message(message.chat.id, f"📄 Website Text:\n{text}")
