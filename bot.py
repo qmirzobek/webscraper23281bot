@@ -2,13 +2,8 @@ import os
 import requests
 import telebot
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, quote_plus
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-import time
+from urllib.parse import urljoin
+from requests_html import HTMLSession
 
 # 🔹 Replace with your Telegram bot token from @BotFather
 BOT_TOKEN = os.getenv("YOUR_BOT_TOKEN")
@@ -41,86 +36,41 @@ def extract_images(url):
             img_url = urljoin(url, img_url)  # Convert relative to absolute URL
             images.append(img_url)
 
-    return images[:5]  # Limit to first 5 images
+    return images[:10]  # Limit to first 5 images
 
-# ✅ Function to search Pinterest for images
-def search_pinterest(query):
-    # Configure Chrome for headless browsing
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--no-sandbox")
+# ✅ Function to fetch Pinterest images using requests-html
+def fetch_pinterest_images(query):
+    session = HTMLSession()
+    url = f"https://www.pinterest.com/search/pins/?q={query}"
+    response = session.get(url)
+    response.html.render()  # Execute JavaScript
 
-    # Set up ChromeDriver
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
+    # Extract image URLs
+    images = response.html.xpath('//img/@src')
+    return images[:10]  # Return first 10 images
 
-    try:
-        # Open Pinterest search page
-        search_url = f"https://www.pinterest.com/search/pins/?q={quote_plus(query)}"
-        driver.get(search_url)
+# ✅ Telegram bot command: Handle /pinterest
+@bot.message_handler(commands=["pinterest"])
+def pinterest_search(message):
+    query = message.text.replace("/pinterest ", "").strip()
 
-        # Wait for images to load
-        time.sleep(5)  # Allow dynamic content to load
+    if not query:
+        bot.reply_to(message, "❌ Please provide a search term. Example: `/pinterest cats`")
+        return
 
-        # Extract image elements
-        images = driver.find_elements(By.TAG_NAME, "img")
+    bot.send_message(message.chat.id, f"🔍 Searching Pinterest for: {query}")
+    images = fetch_pinterest_images(query)
 
-        image_urls = []
-        for img in images[:10]:  # Get first 10 images
-            img_url = img.get_attribute("src")
-            if img_url and "https://" in img_url:
-                image_urls.append(img_url)
-
-        return image_urls
-
-    finally:
-        driver.quit()  # Close browser
+    if images:
+        for img_url in images:
+            bot.send_photo(message.chat.id, img_url)
+    else:
+        bot.send_message(message.chat.id, "❌ No images found.")
 
 # ✅ Telegram bot command: Handle /start
 @bot.message_handler(commands=["start"])
 def start_message(message):
-    bot.reply_to(message, "Send me a website link, and I'll extract text, images, and videos!")
-
-# ✅ Telegram bot command: Handle links
-@bot.message_handler(func=lambda message: message.text.startswith("http"))
-def handle_link(message):
-    url = message.text.strip()
-    bot.send_message(message.chat.id, f"🔍 Extracting content from: {url}")
-
-    # Extract and send text
-    text = extract_text(url)
-    if len(text) > 4096:
-        bot.send_message(message.chat.id, f"📄 Website Text:\n{text[:4096]}")
-        for i in range(4096, len(text), 4096):
-            bot.send_message(message.chat.id, f"{text[i:i+4096]}")
-    else:
-        bot.send_message(message.chat.id, f"📄 Website Text:\n{text}")
-
-    # Extract and send images
-    images = extract_images(url)
-    if images:
-        for img_url in images:
-            bot.send_photo(message.chat.id, img_url)
-    else:
-        bot.send_message(message.chat.id, "❌ No images found.")
-
-# ✅ Telegram bot command: Handle /pinterest search
-@bot.message_handler(commands=["pinterest"])
-def pinterest_search(message):
-    query = message.text.replace("/pinterest", "").strip()
-    if not query:
-        bot.reply_to(message, "Please provide a search term. Example: `/pinterest cats`")
-        return
-
-    bot.send_message(message.chat.id, f"🔍 Searching Pinterest for: {query}")
-
-    images = search_pinterest(query)
-    if images:
-        for img_url in images:
-            bot.send_photo(message.chat.id, img_url)
-    else:
-        bot.send_message(message.chat.id, "❌ No images found.")
+    bot.reply_to(message, "Send me a website link, or use /pinterest <query> to search images!")
 
 # ✅ Start the bot
 print("🤖 Bot is running...")
