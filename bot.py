@@ -18,10 +18,19 @@ def extract_text(url):
     for tag in soup(["script", "meta", "noscript"]):
         tag.extract()
 
+
     # Extract text
     text = soup.get_text(separator="\n").strip()
     return text  # Telegram limits message size
-
+def extract_from_w3schools(url):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers)
+    soup = BeautifulSoup(response.text, "html.parser")
+    articles = soup.find_all("div", class_="contentcontainer")
+    text = ""
+    for article in articles:
+        text+=article
+    return text
 # ✅ Function to extract image URLs
 def extract_images(url):
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -48,8 +57,16 @@ def handle_link(message):
     url = message.text.strip()
     bot.send_message(message.chat.id, f"🔍 Extracting content from: {url}")
 
-    # Extract and send text
-    text = extract_text(url)
+    
+
+    words=url.split("/")
+    if 'w3schools' in words:
+        text=extract_from_w3schools(url)
+        # bot.send_message(message.chat.id, "Sorry, I can't extract content from W3Schools.")
+        # return
+    else:
+        # Extract and send text
+        text = extract_text(url)
     if(len(text) > 4096):
         bot.send_message(message.chat.id, f"📄 Website Text:\n{text[:4096]}")
         for i in range(4096, len(text), 4096):
