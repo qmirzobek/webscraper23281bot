@@ -20,7 +20,7 @@ def extract_text(url):
 
     # Extract text
     text = soup.get_text(separator="\n").strip()
-    return text[:4096]  # Telegram limits message size
+    return text  # Telegram limits message size
 
 # ✅ Function to extract image URLs
 def extract_images(url):
@@ -50,7 +50,12 @@ def handle_link(message):
 
     # Extract and send text
     text = extract_text(url)
-    bot.send_message(message.chat.id, f"📄 Website Text:\n{text}")
+    if(len(text) > 4096):
+        bot.send_message(message.chat.id, f"📄 Website Text:\n{text[:4096]}")
+        for i in range(4096, len(text), 4096):
+            bot.send_message(message.chat.id, f"{text[i:i+4096]}")
+    else:
+        bot.send_message(message.chat.id, f"📄 Website Text:\n{text}")
 
     # Extract and send images
     images = extract_images(url)
