@@ -2,8 +2,8 @@ import os
 import requests
 import telebot
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
 import yt_dlp
+from urllib.parse import quote_plus, urljoin
 
 # 🔹 Replace with your Telegram bot token
 BOT_TOKEN = os.getenv("YOUR_BOT_TOKEN")
@@ -19,7 +19,6 @@ def extract_text(url):
     for tag in soup(["script", "meta", "noscript"]):
         tag.extract()
 
-    # Extract text
     text = soup.get_text(separator="\n").strip()
     return text
 
@@ -28,122 +27,118 @@ def extract_images(url):
     headers = {"User-Agent": "Mozilla/5.0"}
     response = requests.get(url, headers=headers)
     soup = BeautifulSoup(response.text, "html.parser")
-
+    
     images = []
     for img_tag in soup.find_all("img"):
         img_url = img_tag.get("src")
         if img_url:
             img_url = urljoin(url, img_url)  # Convert relative to absolute URL
             images.append(img_url)
-
+    
     return images[:5]  # Limit to first 5 images
 
-# ✅ Function to download a YouTube video in a single format (avoiding ffmpeg errors)
-def download_video(url):
-    output_dir = "downloads"
-    os.makedirs(output_dir, exist_ok=True)  # Create downloads folder if not exists
-
+# ✅ Function to download YouTube video as MP4
+def download_youtube_video(url):
     ydl_opts = {
-        "format": "best",  # ✅ Avoids "bestvideo+bestaudio" merging issue
-        "outtmpl": os.path.join(output_dir, "%(title)s.%(ext)s"),
+        "format": "bestvideo+bestaudio/best",
+        "outtmpl": "video.mp4",
+        "merge_output_format": "mp4",
+        "quiet": True
     }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        file_path = ydl.prepare_filename(info)
-        return file_path
-
-# ✅ Function to download audio separately as MP3
-def download_audio(url):
-    output_dir = "downloads"
-    os.makedirs(output_dir, exist_ok=True)
-
-    ydl_opts = {
-        "format": "bestaudio",  # ✅ Downloads only the best audio format
-        "outtmpl": os.path.join(output_dir, "%(title)s.%(ext)s"),
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }
-        ],
-    }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        file_path = ydl.prepare_filename(info).replace(info["ext"], "mp3")
-        return file_path
-
-# ✅ Function to download an entire YouTube playlist
-def download_playlist(url):
-    output_dir = "downloads"
-    os.makedirs(output_dir, exist_ok=True)
-
-    ydl_opts = {
-        "format": "best",
-        "outtmpl": os.path.join(output_dir, "%(playlist)s/%(title)s.%(ext)s"),
-    }
-
+    
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
-        return output_dir
+    
+    return "video.mp4"
+
+# ✅ Function to download YouTube audio as MP3
+def download_youtube_audio(url):
+    ydl_opts = {
+        "format": "bestaudio",
+        "outtmpl": "audio.mp3",
+        "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}],
+        "quiet": True
+    }
+    
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+    
+    return "audio.mp3"
+
+# ✅ Function to search Pinterest images
+def search_pinterest(query):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    search_url = f"https://www.pinterest.com/search/pins/?q={quote_plus(query)}"
+    response = requests.get(search_url, headers=headers)
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    image_urls = []
+
+    for img_tag in soup.find_all("img", limit=10):  # Get first 10 images
+        img_url = img_tag.get("src")
+        if img_url and "https://" in img_url:
+            image_urls.append(img_url)
+
+    return image_urls
 
 # ✅ Telegram bot command: Handle /start
 @bot.message_handler(commands=["start"])
 def start_message(message):
-    bot.reply_to(message, "Send me a website link, YouTube video, or playlist, and I'll extract content!")
+    bot.reply_to(
+        message, "Send me a website link, YouTube video, or Pinterest search query!\n"
+        "👉 `/pinterest cats` to search Pinterest images\n"
+        "👉 Send a **YouTube link** to download video/audio\n"
+        "👉 Send any **website link** to extract text & images."
+    )
 
-# ✅ Handle links
+# ✅ Handle website links
 @bot.message_handler(func=lambda message: message.text.startswith("http"))
 def handle_link(message):
     url = message.text.strip()
+    bot.send_message(message.chat.id, f"🔍 Extracting content from: {url}")
 
     if "youtube.com" in url or "youtu.be" in url:
-        if "playlist" in url:
-            bot.send_message(message.chat.id, f"📥 Downloading full playlist: {url}")
-            playlist_path = download_playlist(url)
-            bot.send_message(message.chat.id, "✅ Playlist downloaded! Check your files.")
-        else:
-            bot.send_message(message.chat.id, f"📥 Downloading video: {url}")
-            video_path = download_video(url)
+        bot.send_message(message.chat.id, "📥 Downloading YouTube video...")
+        video_path = download_youtube_video(url)
+        audio_path = download_youtube_audio(url)
 
-            if os.path.exists(video_path):
-                with open(video_path, "rb") as video_file:
-                    bot.send_video(message.chat.id, video_file)
-                os.remove(video_path)
-            else:
-                bot.send_message(message.chat.id, "❌ Failed to download video.")
-
-            bot.send_message(message.chat.id, "🎵 Extracting audio...")
-            audio_path = download_audio(url)
-
-            if os.path.exists(audio_path):
-                with open(audio_path, "rb") as audio_file:
-                    bot.send_audio(message.chat.id, audio_file)
-                os.remove(audio_path)
-            else:
-                bot.send_message(message.chat.id, "❌ Failed to extract audio.")
+        # Send video
+        with open(video_path, "rb") as video:
+            bot.send_video(message.chat.id, video)
+        
+        # Send audio
+        with open(audio_path, "rb") as audio:
+            bot.send_audio(message.chat.id, audio)
 
     else:
-        bot.send_message(message.chat.id, f"🔍 Extracting content from: {url}")
-
-        # Extract text
         text = extract_text(url)
-        if len(text) > 4096:
-            bot.send_message(message.chat.id, text[:4096])
-            for i in range(4096, len(text), 4096):
-                bot.send_message(message.chat.id, text[i:i + 4096])
-        else:
-            bot.send_message(message.chat.id, text)
+        bot.send_message(message.chat.id, f"📄 Website Text:\n{text[:4096]}")
 
-        # Extract images
         images = extract_images(url)
         if images:
             for img_url in images:
                 bot.send_photo(message.chat.id, img_url)
         else:
             bot.send_message(message.chat.id, "❌ No images found.")
+
+# ✅ Handle Pinterest search queries
+@bot.message_handler(commands=["pinterest"])
+def handle_pinterest(message):
+    query = message.text.replace("/pinterest", "").strip()
+    
+    if not query:
+        bot.reply_to(message, "❌ Please provide a search term. Example: `/pinterest cats`")
+        return
+
+    bot.send_message(message.chat.id, f"🔎 Searching Pinterest for '{query}'...")
+    
+    image_urls = search_pinterest(query)
+    
+    if not image_urls:
+        bot.send_message(message.chat.id, "❌ No images found!")
+    else:
+        for img_url in image_urls:
+            bot.send_photo(message.chat.id, img_url)
 
 # ✅ Start the bot
 print("🤖 Bot is running...")
