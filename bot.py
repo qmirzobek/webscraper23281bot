@@ -1,9 +1,9 @@
 import os
 import requests
 import telebot
-import yt_dlp
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+import yt_dlp
 
 # 🔹 Replace with your Telegram bot token
 BOT_TOKEN = os.getenv("YOUR_BOT_TOKEN")
@@ -19,131 +19,131 @@ def extract_text(url):
     for tag in soup(["script", "meta", "noscript"]):
         tag.extract()
 
-    return soup.get_text(separator="\n").strip()
+    # Extract text
+    text = soup.get_text(separator="\n").strip()
+    return text
 
-# ✅ Function to extract image URLs
+# ✅ Function to extract images from a website
 def extract_images(url):
     headers = {"User-Agent": "Mozilla/5.0"}
     response = requests.get(url, headers=headers)
     soup = BeautifulSoup(response.text, "html.parser")
-    
+
     images = []
     for img_tag in soup.find_all("img"):
         img_url = img_tag.get("src")
         if img_url:
             img_url = urljoin(url, img_url)  # Convert relative to absolute URL
             images.append(img_url)
-    
+
     return images[:5]  # Limit to first 5 images
 
-# ✅ Function to download YouTube video using yt-dlp
-def download_youtube_video(url):
+# ✅ Function to download a YouTube video in a single format (avoiding ffmpeg errors)
+def download_video(url):
+    output_dir = "downloads"
+    os.makedirs(output_dir, exist_ok=True)  # Create downloads folder if not exists
+
     ydl_opts = {
-        "format": "bestvideo+bestaudio/best",  # Get best video & audio
-        "outtmpl": "video.%(ext)s",  # Save video file
-        "postprocessors": [
-            {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
-        ],
+        "format": "best",  # ✅ Avoids "bestvideo+bestaudio" merging issue
+        "outtmpl": os.path.join(output_dir, "%(title)s.%(ext)s"),
     }
-    
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        video_filename = ydl.prepare_filename(info)
-        video_filename = video_filename.replace(info['ext'], 'mp4')
-    
-    # Download audio separately
-    ydl_opts_audio = {
-        "format": "bestaudio/best",
-        "outtmpl": "audio.%(ext)s",
-        "postprocessors": [
-            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3"},
-        ],
-    }
-    
-    with yt_dlp.YoutubeDL(ydl_opts_audio) as ydl:
-        ydl.extract_info(url, download=True)
+        file_path = ydl.prepare_filename(info)
+        return file_path
 
-    return video_filename, "audio.mp3"
+# ✅ Function to download audio separately as MP3
+def download_audio(url):
+    output_dir = "downloads"
+    os.makedirs(output_dir, exist_ok=True)
 
-# ✅ Function to download all videos from a YouTube playlist
-def download_youtube_playlist(url):
     ydl_opts = {
-        "format": "bestvideo+bestaudio/best",
-        "outtmpl": "playlist/%(title)s.%(ext)s",
+        "format": "bestaudio",  # ✅ Downloads only the best audio format
+        "outtmpl": os.path.join(output_dir, "%(title)s.%(ext)s"),
         "postprocessors": [
-            {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }
         ],
     }
-    
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
+        file_path = ydl.prepare_filename(info).replace(info["ext"], "mp3")
+        return file_path
 
-    video_files = [f"playlist/{video['title']}.mp4" for video in info["entries"]]
+# ✅ Function to download an entire YouTube playlist
+def download_playlist(url):
+    output_dir = "downloads"
+    os.makedirs(output_dir, exist_ok=True)
 
-    return video_files
+    ydl_opts = {
+        "format": "best",
+        "outtmpl": os.path.join(output_dir, "%(playlist)s/%(title)s.%(ext)s"),
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+        return output_dir
 
 # ✅ Telegram bot command: Handle /start
 @bot.message_handler(commands=["start"])
 def start_message(message):
-    bot.reply_to(message, "Send me a website or YouTube link (video or playlist), and I'll process it!")
+    bot.reply_to(message, "Send me a website link, YouTube video, or playlist, and I'll extract content!")
 
-# ✅ Telegram bot command: Handle links
+# ✅ Handle links
 @bot.message_handler(func=lambda message: message.text.startswith("http"))
 def handle_link(message):
     url = message.text.strip()
-    bot.send_message(message.chat.id, f"🔍 Extracting content from: {url}")
 
-    # Detect if the link is a YouTube **playlist**
-    if "playlist" in url:
-        bot.send_message(message.chat.id, "📥 Downloading entire YouTube playlist...")
-        try:
-            video_files = download_youtube_playlist(url)
-            
-            # Send all videos one by one
-            for video_file in video_files:
-                with open(video_file, "rb") as video:
-                    bot.send_video(message.chat.id, video)
-                os.remove(video_file)
-        except Exception as e:
-            bot.send_message(message.chat.id, f"❌ Failed to download playlist: {str(e)}")
-        return
-
-    # Detect if the link is a YouTube **video**
     if "youtube.com" in url or "youtu.be" in url:
-        bot.send_message(message.chat.id, "📥 Downloading YouTube video...")
-        try:
-            video_path, audio_path = download_youtube_video(url)
-            
-            # Send video
-            with open(video_path, "rb") as video:
-                bot.send_video(message.chat.id, video)
+        if "playlist" in url:
+            bot.send_message(message.chat.id, f"📥 Downloading full playlist: {url}")
+            playlist_path = download_playlist(url)
+            bot.send_message(message.chat.id, "✅ Playlist downloaded! Check your files.")
+        else:
+            bot.send_message(message.chat.id, f"📥 Downloading video: {url}")
+            video_path = download_video(url)
 
-            # Send audio
-            with open(audio_path, "rb") as audio:
-                bot.send_audio(message.chat.id, audio)
+            if os.path.exists(video_path):
+                with open(video_path, "rb") as video_file:
+                    bot.send_video(message.chat.id, video_file)
+                os.remove(video_path)
+            else:
+                bot.send_message(message.chat.id, "❌ Failed to download video.")
 
-            # Delete files after sending
-            os.remove(video_path)
-            os.remove(audio_path)
-        except Exception as e:
-            bot.send_message(message.chat.id, f"❌ Failed to download video: {str(e)}")
-        return
+            bot.send_message(message.chat.id, "🎵 Extracting audio...")
+            audio_path = download_audio(url)
 
-    # Extract and send text
-    text = extract_text(url)
-    if len(text) > 4096:
-        for i in range(0, len(text), 4096):
-            bot.send_message(message.chat.id, f"{text[i:i+4096]}")
+            if os.path.exists(audio_path):
+                with open(audio_path, "rb") as audio_file:
+                    bot.send_audio(message.chat.id, audio_file)
+                os.remove(audio_path)
+            else:
+                bot.send_message(message.chat.id, "❌ Failed to extract audio.")
+
     else:
-        bot.send_message(message.chat.id, f"📄 Website Text:\n{text}")
+        bot.send_message(message.chat.id, f"🔍 Extracting content from: {url}")
 
-    # Extract and send images
-    images = extract_images(url)
-    if images:
-        for img_url in images:
-            bot.send_photo(message.chat.id, img_url)
-    else:
-        bot.send_message(message.chat.id, "❌ No images found.")
+        # Extract text
+        text = extract_text(url)
+        if len(text) > 4096:
+            bot.send_message(message.chat.id, text[:4096])
+            for i in range(4096, len(text), 4096):
+                bot.send_message(message.chat.id, text[i:i + 4096])
+        else:
+            bot.send_message(message.chat.id, text)
+
+        # Extract images
+        images = extract_images(url)
+        if images:
+            for img_url in images:
+                bot.send_photo(message.chat.id, img_url)
+        else:
+            bot.send_message(message.chat.id, "❌ No images found.")
 
 # ✅ Start the bot
 print("🤖 Bot is running...")
