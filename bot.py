@@ -1,11 +1,11 @@
 import os
 import requests
 import telebot
-from pytube import YouTube
+import yt_dlp
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
-# 🔹 Replace with your Telegram bot token from @BotFather
+# 🔹 Replace with your Telegram bot token
 BOT_TOKEN = os.getenv("YOUR_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -19,9 +19,7 @@ def extract_text(url):
     for tag in soup(["script", "meta", "noscript"]):
         tag.extract()
 
-    # Extract text
-    text = soup.get_text(separator="\n").strip()
-    return text
+    return soup.get_text(separator="\n").strip()
 
 # ✅ Function to extract image URLs
 def extract_images(url):
@@ -38,28 +36,56 @@ def extract_images(url):
     
     return images[:5]  # Limit to first 5 images
 
-# ✅ Function to download YouTube video using pytube
+# ✅ Function to download YouTube video using yt-dlp
 def download_youtube_video(url):
-    yt = YouTube(url)
+    ydl_opts = {
+        "format": "bestvideo+bestaudio/best",  # Get best video & audio
+        "outtmpl": "video.%(ext)s",  # Save video file
+        "postprocessors": [
+            {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
+        ],
+    }
     
-    # Download video
-    video_stream = yt.streams.filter(progressive=True, file_extension="mp4").order_by("resolution").desc().first()
-    video_path = video_stream.download(filename="video.mp4")
-
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        video_filename = ydl.prepare_filename(info)
+        video_filename = video_filename.replace(info['ext'], 'mp4')
+    
     # Download audio separately
-    audio_stream = yt.streams.filter(only_audio=True).first()
-    audio_path = audio_stream.download(filename="audio.mp4")
+    ydl_opts_audio = {
+        "format": "bestaudio/best",
+        "outtmpl": "audio.%(ext)s",
+        "postprocessors": [
+            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3"},
+        ],
+    }
+    
+    with yt_dlp.YoutubeDL(ydl_opts_audio) as ydl:
+        ydl.extract_info(url, download=True)
 
-    # Convert audio to MP3
-    mp3_audio_path = "audio.mp3"
-    os.rename(audio_path, mp3_audio_path)
+    return video_filename, "audio.mp3"
 
-    return video_path, mp3_audio_path
+# ✅ Function to download all videos from a YouTube playlist
+def download_youtube_playlist(url):
+    ydl_opts = {
+        "format": "bestvideo+bestaudio/best",
+        "outtmpl": "playlist/%(title)s.%(ext)s",
+        "postprocessors": [
+            {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
+        ],
+    }
+    
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+
+    video_files = [f"playlist/{video['title']}.mp4" for video in info["entries"]]
+
+    return video_files
 
 # ✅ Telegram bot command: Handle /start
 @bot.message_handler(commands=["start"])
 def start_message(message):
-    bot.reply_to(message, "Send me a website link or YouTube link, and I'll extract content or download videos!")
+    bot.reply_to(message, "Send me a website or YouTube link (video or playlist), and I'll process it!")
 
 # ✅ Telegram bot command: Handle links
 @bot.message_handler(func=lambda message: message.text.startswith("http"))
@@ -67,7 +93,22 @@ def handle_link(message):
     url = message.text.strip()
     bot.send_message(message.chat.id, f"🔍 Extracting content from: {url}")
 
-    # Detect if the link is a YouTube video
+    # Detect if the link is a YouTube **playlist**
+    if "playlist" in url:
+        bot.send_message(message.chat.id, "📥 Downloading entire YouTube playlist...")
+        try:
+            video_files = download_youtube_playlist(url)
+            
+            # Send all videos one by one
+            for video_file in video_files:
+                with open(video_file, "rb") as video:
+                    bot.send_video(message.chat.id, video)
+                os.remove(video_file)
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ Failed to download playlist: {str(e)}")
+        return
+
+    # Detect if the link is a YouTube **video**
     if "youtube.com" in url or "youtu.be" in url:
         bot.send_message(message.chat.id, "📥 Downloading YouTube video...")
         try:
