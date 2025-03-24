@@ -3,7 +3,28 @@ import requests
 import telebot
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
-from requests_html import HTMLSession
+# from requests_html import HTMLSession
+import subprocess
+import json
+import scrapy
+
+from scrapy_splash import SplashRequest
+
+class PinterestSpider(scrapy.Spider):
+    name = "pinterest"
+    allowed_domains = ["pinterest.com"]
+
+    def start_requests(self):
+        query = getattr(self, "query", None)  # Get search term from command
+        if not query:
+            return
+
+        search_url = f"https://www.pinterest.com/search/pins/?q={query}"
+        yield SplashRequest(url=search_url, callback=self.parse, args={"wait": 2})
+
+    def parse(self, response):
+        images = response.css("img::attr(src)").getall()
+        yield {"images": images[:10]}  # Return first 10 images
 
 # 🔹 Replace with your Telegram bot token from @BotFather
 BOT_TOKEN = os.getenv("YOUR_BOT_TOKEN")
@@ -38,16 +59,23 @@ def extract_images(url):
 
     return images[:10]  # Limit to first 5 images
 
-# ✅ Function to fetch Pinterest images using requests-html
+# ✅ Function to run Scrapy Spider
 def fetch_pinterest_images(query):
-    session = HTMLSession()
-    url = f"https://www.pinterest.com/search/pins/?q={query}"
-    response = session.get(url)
-    response.html.render()  # Execute JavaScript
-
-    # Extract image URLs
-    images = response.html.xpath('//img/@src')
-    return images[:10]  # Return first 10 images
+    result_file = "pinterest_results.json"
+    # Run Scrapy with Splash and save results
+    subprocess.run(
+        f"scrapy crawl pinterest -a query={query} -o {result_file}",
+        shell=True,
+    )
+    
+    # Read Scrapy results
+    try:
+        with open(result_file, "r") as f:
+            data = json.load(f)
+            return data[0]["images"] if data else []
+    except Exception as e:
+        print(f"Error reading results: {e}")
+        return []
 
 # ✅ Telegram bot command: Handle /pinterest
 @bot.message_handler(commands=["pinterest"])
@@ -67,7 +95,6 @@ def pinterest_search(message):
     else:
         bot.send_message(message.chat.id, "❌ No images found.")
 
-# ✅ Telegram bot command: Handle /start
 @bot.message_handler(commands=["start"])
 def start_message(message):
     bot.reply_to(message, "Send me a website link, or use /pinterest <query> to search images!")
