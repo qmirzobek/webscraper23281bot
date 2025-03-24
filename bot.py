@@ -15,7 +15,7 @@ def extract_text(url):
     soup = BeautifulSoup(response.text, "html.parser")
 
     # Remove unnecessary elements like scripts & styles
-    for tag in soup(["script", "style", "meta", "noscript"]):
+    for tag in soup(["script", "meta", "noscript"]):
         tag.extract()
 
     # Extract text
