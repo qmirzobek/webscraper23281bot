@@ -2,10 +2,15 @@ import os
 import requests
 import telebot
 from bs4 import BeautifulSoup
-import yt_dlp
-from urllib.parse import quote_plus, urljoin
+from urllib.parse import urljoin, quote_plus
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
+import time
 
-# 🔹 Replace with your Telegram bot token
+# 🔹 Replace with your Telegram bot token from @BotFather
 BOT_TOKEN = os.getenv("YOUR_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -19,126 +24,103 @@ def extract_text(url):
     for tag in soup(["script", "meta", "noscript"]):
         tag.extract()
 
+    # Extract text
     text = soup.get_text(separator="\n").strip()
     return text
 
-# ✅ Function to extract images from a website
+# ✅ Function to extract image URLs
 def extract_images(url):
     headers = {"User-Agent": "Mozilla/5.0"}
     response = requests.get(url, headers=headers)
     soup = BeautifulSoup(response.text, "html.parser")
-    
+
     images = []
     for img_tag in soup.find_all("img"):
         img_url = img_tag.get("src")
         if img_url:
             img_url = urljoin(url, img_url)  # Convert relative to absolute URL
             images.append(img_url)
-    
+
     return images[:5]  # Limit to first 5 images
 
-# ✅ Function to download YouTube video as MP4
-def download_youtube_video(url):
-    ydl_opts = {
-        "format": "bestvideo+bestaudio/best",
-        "outtmpl": "video.mp4",
-        "merge_output_format": "mp4",
-        "quiet": True
-    }
-    
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
-    
-    return "video.mp4"
-
-# ✅ Function to download YouTube audio as MP3
-def download_youtube_audio(url):
-    ydl_opts = {
-        "format": "bestaudio",
-        "outtmpl": "audio.mp3",
-        "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}],
-        "quiet": True
-    }
-    
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
-    
-    return "audio.mp3"
-
-# ✅ Function to search Pinterest images
+# ✅ Function to search Pinterest for images
 def search_pinterest(query):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    search_url = f"https://www.pinterest.com/search/pins/?q={quote_plus(query)}"
-    response = requests.get(search_url, headers=headers)
+    # Configure Chrome for headless browsing
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--no-sandbox")
 
-    soup = BeautifulSoup(response.text, "html.parser")
-    image_urls = []
+    # Set up ChromeDriver
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
 
-    for img_tag in soup.find_all("img", limit=10):  # Get first 10 images
-        img_url = img_tag.get("src")
-        if img_url and "https://" in img_url:
-            image_urls.append(img_url)
+    try:
+        # Open Pinterest search page
+        search_url = f"https://www.pinterest.com/search/pins/?q={quote_plus(query)}"
+        driver.get(search_url)
 
-    return image_urls
+        # Wait for images to load
+        time.sleep(5)  # Allow dynamic content to load
+
+        # Extract image elements
+        images = driver.find_elements(By.TAG_NAME, "img")
+
+        image_urls = []
+        for img in images[:10]:  # Get first 10 images
+            img_url = img.get_attribute("src")
+            if img_url and "https://" in img_url:
+                image_urls.append(img_url)
+
+        return image_urls
+
+    finally:
+        driver.quit()  # Close browser
 
 # ✅ Telegram bot command: Handle /start
 @bot.message_handler(commands=["start"])
 def start_message(message):
-    bot.reply_to(
-        message, "Send me a website link, YouTube video, or Pinterest search query!\n"
-        "👉 `/pinterest cats` to search Pinterest images\n"
-        "👉 Send a **YouTube link** to download video/audio\n"
-        "👉 Send any **website link** to extract text & images."
-    )
+    bot.reply_to(message, "Send me a website link, and I'll extract text, images, and videos!")
 
-# ✅ Handle website links
+# ✅ Telegram bot command: Handle links
 @bot.message_handler(func=lambda message: message.text.startswith("http"))
 def handle_link(message):
     url = message.text.strip()
     bot.send_message(message.chat.id, f"🔍 Extracting content from: {url}")
 
-    if "youtube.com" in url or "youtu.be" in url:
-        bot.send_message(message.chat.id, "📥 Downloading YouTube video...")
-        video_path = download_youtube_video(url)
-        audio_path = download_youtube_audio(url)
-
-        # Send video
-        with open(video_path, "rb") as video:
-            bot.send_video(message.chat.id, video)
-        
-        # Send audio
-        with open(audio_path, "rb") as audio:
-            bot.send_audio(message.chat.id, audio)
-
-    else:
-        text = extract_text(url)
+    # Extract and send text
+    text = extract_text(url)
+    if len(text) > 4096:
         bot.send_message(message.chat.id, f"📄 Website Text:\n{text[:4096]}")
+        for i in range(4096, len(text), 4096):
+            bot.send_message(message.chat.id, f"{text[i:i+4096]}")
+    else:
+        bot.send_message(message.chat.id, f"📄 Website Text:\n{text}")
 
-        images = extract_images(url)
-        if images:
-            for img_url in images:
-                bot.send_photo(message.chat.id, img_url)
-        else:
-            bot.send_message(message.chat.id, "❌ No images found.")
+    # Extract and send images
+    images = extract_images(url)
+    if images:
+        for img_url in images:
+            bot.send_photo(message.chat.id, img_url)
+    else:
+        bot.send_message(message.chat.id, "❌ No images found.")
 
-# ✅ Handle Pinterest search queries
+# ✅ Telegram bot command: Handle /pinterest search
 @bot.message_handler(commands=["pinterest"])
-def handle_pinterest(message):
+def pinterest_search(message):
     query = message.text.replace("/pinterest", "").strip()
-    
     if not query:
-        bot.reply_to(message, "❌ Please provide a search term. Example: `/pinterest cats`")
+        bot.reply_to(message, "Please provide a search term. Example: `/pinterest cats`")
         return
 
-    bot.send_message(message.chat.id, f"🔎 Searching Pinterest for '{query}'...")
-    
-    image_urls = search_pinterest(query)
-    
-    if not image_urls:
-        bot.send_message(message.chat.id, "❌ No images found!")
-    else:
-        for img_url in image_urls:
+    bot.send_message(message.chat.id, f"🔍 Searching Pinterest for: {query}")
+
+    images = search_pinterest(query)
+    if images:
+        for img_url in images:
             bot.send_photo(message.chat.id, img_url)
+    else:
+        bot.send_message(message.chat.id, "❌ No images found.")
 
 # ✅ Start the bot
 print("🤖 Bot is running...")
